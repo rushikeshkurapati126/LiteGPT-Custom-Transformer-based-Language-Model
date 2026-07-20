@@ -1,149 +1,109 @@
-import os
+import streamlit as st
+import requests
 
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+# Backend URL
+BACKEND_URL = "http://127.0.0.1:8000/chat"
 
+st.set_page_config(
+    page_title="AI Chatbot",
+    page_icon="🤖",
+    layout="wide"
+)
 
-class RAG:
+st.title("🤖 AI Chatbot")
 
-    def __init__(self):
+# Store chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-        self.embedding = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
-        )
+# Display previous messages
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
 
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+# User input
+prompt = st.chat_input("Type your message...")
 
-        self.vector_db_path = os.path.join(self.base_dir, "vector_db")
+if prompt:
 
-    # -----------------------------
-    # Load PDF
-    # -----------------------------
-    def load_pdf(self, pdf_path):
+    # Show user message
+    st.session_state.messages.append(
+        {"role": "user", "content": prompt}
+    )
 
-        loader = PyPDFLoader(pdf_path)
+    with st.chat_message("user"):
+        st.markdown(prompt)
 
-        documents = loader.load()
+    # Get AI response
+    with st.chat_message("assistant"):
 
-        splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=100
-        )
+        with st.spinner("Thinking..."):
 
-        chunks = splitter.split_documents(documents)
+            try:
 
-        return chunks
+                response = requests.post(
+                    BACKEND_URL,
+                    json={"message": prompt},
+                    timeout=60
+                )
 
-    # -----------------------------
-    # Create Vector Database
-    # -----------------------------
-    def create_vector_database(self, folder_path):
+                if response.status_code == 200:
 
-        if not os.path.exists(folder_path):
-            raise FileNotFoundError(
-                f"Documents folder not found:\n{folder_path}"
-            )
+                    data = response.json()
 
-        all_chunks = []
+                    reply = data.get(
+                        "response",
+                        "No response received."
+                    )
 
-        pdf_files = [
-            file for file in os.listdir(folder_path)
-            if file.endswith(".pdf")
-        ]
+                else:
 
-        if len(pdf_files) == 0:
-            raise Exception("No PDF files found inside documents folder.")
+                    reply = f"Backend Error ({response.status_code})\n\n{response.text}"
 
-        print(f"\nFound {len(pdf_files)} PDF(s)\n")
+            except requests.exceptions.ConnectionError:
 
-        for file in pdf_files:
+                reply = (
+                    "❌ Cannot connect to backend.\n\n"
+                    "Make sure FastAPI is running:\n\n"
+                    "python -m uvicorn app:app --reload"
+                )
 
-            pdf_path = os.path.join(folder_path, file)
+            except Exception as e:
 
-            print("Loading:", file)
+                reply = f"Error:\n\n{str(e)}"
 
-            chunks = self.load_pdf(pdf_path)
+            st.markdown(reply)
 
-            all_chunks.extend(chunks)
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": reply
+        }
+    )
 
-        print(f"\nTotal Chunks Created : {len(all_chunks)}")
+# Sidebar
+with st.sidebar:
 
-        db = FAISS.from_documents(
-            all_chunks,
-            self.embedding
-        )
+    st.title("Settings")
 
-        db.save_local(self.vector_db_path)
+    if st.button("🗑 Clear Chat"):
+        st.session_state.messages = []
+        st.rerun()
 
-        print("\nVector Database Saved Successfully")
-        print("Location:", self.vector_db_path)
+    st.markdown("---")
 
-    # -----------------------------
-    # Load Vector Database
-    # -----------------------------
-    def load_vector_database(self):
+    st.write("Backend")
 
-        if not os.path.exists(self.vector_db_path):
-            raise Exception(
-                "Vector database not found. Run rag.py first."
-            )
+    if st.button("Check Backend"):
 
-        db = FAISS.load_local(
-            self.vector_db_path,
-            self.embedding,
-            allow_dangerous_deserialization=True
-        )
+        try:
 
-        return db
+            r = requests.get("http://127.0.0.1:8000")
 
-    # -----------------------------
-    # Retrieve Context
-    # -----------------------------
-    def retrieve(self, question, k=3):
+            if r.status_code == 200:
+                st.success("Backend Connected ✅")
+            else:
+                st.error("Backend Error")
 
-        db = self.load_vector_database()
-
-        retriever = db.as_retriever(
-            search_kwargs={"k": k}
-        )
-
-        docs = retriever.invoke(question)
-
-        context = ""
-
-        for doc in docs:
-
-            context += doc.page_content
-            context += "\n\n"
-
-        return context
-
-
-# ===========================================================
-# Main
-# ===========================================================
-
-if __name__ == "__main__":
-
-    rag = RAG()
-
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-    DOCS_PATH = os.path.join(BASE_DIR, "documents")
-
-    print("\nDocuments Folder")
-    print(DOCS_PATH)
-
-    rag.create_vector_database(DOCS_PATH)
-
-    print("\nTesting Retrieval...\n")
-
-    question = input("Enter Question : ")
-
-    context = rag.retrieve(question)
-
-    print("\nRetrieved Context\n")
-    print("=" * 70)
-    print(context)
+        except:
+            st.error("Backend Not Running ❌")
